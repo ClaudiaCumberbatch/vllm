@@ -148,6 +148,21 @@ class EngineClient(ABC):
         ...
 
     @abstractmethod
+    async def pin_kv_workflow(self, workflow_id: str) -> int:
+        """Pin KV cache blocks for a workflow to prevent eviction."""
+        ...
+
+    @abstractmethod
+    async def unpin_kv_workflow(self, workflow_id: str) -> int:
+        """Unpin KV cache blocks for a workflow."""
+        ...
+
+    @abstractmethod
+    async def force_evict_kv_workflow(self, workflow_id: str) -> int:
+        """Force-evict KV cache blocks for a workflow."""
+        ...
+
+    @abstractmethod
     async def sleep(self, level: int = 1, mode: "PauseMode" = "abort") -> None:
         """Sleep the engine"""
         ...

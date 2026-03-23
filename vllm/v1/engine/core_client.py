@@ -12,7 +12,6 @@ from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
-from multiprocessing.queues import Queue
 from threading import Thread
 from typing import Any, TypeAlias, TypeVar
 
@@ -46,7 +45,6 @@ from vllm.v1.engine import (
 from vllm.v1.engine.coordinator import DPCoordinator
 from vllm.v1.engine.core import EngineCore, EngineCoreProc
 from vllm.v1.engine.exceptions import EngineDeadError
-from vllm.v1.engine.tensor_ipc import TensorIpcSender
 from vllm.v1.engine.utils import (
     CoreEngineActorManager,
     CoreEngineProcManager,
@@ -229,6 +227,15 @@ class EngineCoreClient(ABC):
     ) -> bool:
         raise NotImplementedError
 
+    async def pin_kv_workflow_async(self, workflow_id: str) -> int:
+        raise NotImplementedError
+
+    async def unpin_kv_workflow_async(self, workflow_id: str) -> int:
+        raise NotImplementedError
+
+    async def force_evict_kv_workflow_async(self, workflow_id: str) -> int:
+        raise NotImplementedError
+
     async def reset_encoder_cache_async(self) -> None:
         raise NotImplementedError
 
@@ -318,6 +325,15 @@ class InprocClient(EngineCoreClient):
 
     def reset_encoder_cache(self) -> None:
         self.engine_core.reset_encoder_cache()
+
+    def pin_kv_workflow(self, workflow_id: str) -> int:
+        return self.engine_core.pin_kv_workflow(workflow_id)
+
+    def unpin_kv_workflow(self, workflow_id: str) -> int:
+        return self.engine_core.unpin_kv_workflow(workflow_id)
+
+    def force_evict_kv_workflow(self, workflow_id: str) -> int:
+        return self.engine_core.force_evict_kv_workflow(workflow_id)
 
     def sleep(self, level: int = 1, mode: PauseMode = "abort") -> None:
         if mode == "wait":
@@ -479,6 +495,9 @@ class MPClient(EngineCoreClient):
         client_addresses: dict[str, str] | None = None,
     ):
         self.vllm_config = vllm_config
+        # Serialization setup.
+        self.encoder = MsgpackEncoder()
+        self.decoder = MsgpackDecoder(EngineCoreOutputs)
 
         # ZMQ setup.
         sync_ctx = zmq.Context(io_threads=2)
@@ -500,14 +519,11 @@ class MPClient(EngineCoreClient):
             enable_input_socket_handover = parallel_config.enable_elastic_ep
 
             self.stats_update_address: str | None = None
-            tensor_queue: Queue | None = None
             if client_addresses:
                 # Engines are managed externally to this client.
                 input_address = client_addresses["input_address"]
                 output_address = client_addresses["output_address"]
                 self.stats_update_address = client_addresses.get("stats_update_address")
-                # Tensor queues passed via client_addresses for multi-API-server case
-                tensor_queue = client_addresses.get("tensor_queue")  # type: ignore[assignment]
                 self.input_socket = self.resources.input_socket = make_zmq_socket(
                     self.ctx,
                     input_address,
@@ -534,7 +550,7 @@ class MPClient(EngineCoreClient):
 
                 with launch_core_engines(
                     vllm_config, executor_class, log_stats, addresses
-                ) as (engine_manager, coordinator, addresses, tensor_queue):
+                ) as (engine_manager, coordinator, addresses):
                     self.resources.coordinator = coordinator
                     self.resources.engine_manager = engine_manager
 
@@ -543,17 +559,6 @@ class MPClient(EngineCoreClient):
                     assert self.stats_update_address == (
                         coordinator.get_stats_publish_address()
                     )
-
-            # Serialization setup with tensor queues for multimodal tensor IPC.
-            tensor_ipc_sender: TensorIpcSender | None = None
-            model_config = getattr(vllm_config, "model_config", None)
-            if model_config is not None and model_config.multimodal_config is not None:
-                mm_tensor_ipc = model_config.multimodal_config.mm_tensor_ipc
-                if mm_tensor_ipc == "torch_shm" and tensor_queue is not None:
-                    tensor_ipc_sender = TensorIpcSender(tensor_queue)
-
-            self.encoder = MsgpackEncoder(oob_tensor_consumer=tensor_ipc_sender)
-            self.decoder = MsgpackDecoder(EngineCoreOutputs)
 
             dp_size = parallel_config.data_parallel_size
             dp_rank = parallel_config.data_parallel_index
@@ -832,6 +837,15 @@ class SyncMPClient(MPClient):
     def reset_encoder_cache(self) -> None:
         self.call_utility("reset_encoder_cache")
 
+    def pin_kv_workflow(self, workflow_id: str) -> int:
+        return self.call_utility("pin_kv_workflow", workflow_id)
+
+    def unpin_kv_workflow(self, workflow_id: str) -> int:
+        return self.call_utility("unpin_kv_workflow", workflow_id)
+
+    def force_evict_kv_workflow(self, workflow_id: str) -> int:
+        return self.call_utility("force_evict_kv_workflow", workflow_id)
+
     def add_lora(self, lora_request: LoRARequest) -> bool:
         return self.call_utility("add_lora", lora_request)
 
@@ -1079,6 +1093,16 @@ class AsyncMPClient(MPClient):
 
     async def reset_encoder_cache_async(self) -> None:
         await self.call_utility_async("reset_encoder_cache")
+
+    async def pin_kv_workflow_async(self, workflow_id: str) -> int:
+        return await self.call_utility_async("pin_kv_workflow", workflow_id)
+
+    async def unpin_kv_workflow_async(self, workflow_id: str) -> int:
+        return await self.call_utility_async("unpin_kv_workflow", workflow_id)
+
+    async def force_evict_kv_workflow_async(self, workflow_id: str) -> int:
+        return await self.call_utility_async(
+            "force_evict_kv_workflow", workflow_id)
 
     async def sleep_async(self, level: int = 1, mode: PauseMode = "abort") -> None:
         await self.call_utility_async("sleep", level, mode)

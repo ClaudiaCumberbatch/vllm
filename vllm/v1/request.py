@@ -93,6 +93,8 @@ class Request:
 
         # P/D: Connector-specific KV transfer parameters.
         self.kv_transfer_params: dict[str, Any] | None = None
+        # Workflow ID for KV cache lifecycle control.
+        self.workflow_id: str | None = None
 
         if pooling_params is not None:
             # Pooling models.
@@ -107,6 +109,9 @@ class Request:
             if sampling_params.extra_args is not None:
                 self.kv_transfer_params = sampling_params.extra_args.get(
                     "kv_transfer_params"
+                )
+                self.workflow_id = sampling_params.extra_args.get(
+                    "workflow_id"
                 )
         else:
             raise ValueError("sampling_params and pooling_params can't both be unset")

@@ -214,6 +214,12 @@ def build_app(
 
         attach_rlhf_router(app)
 
+        from vllm.entrypoints.serve.kv.api_router import (
+            attach_router as attach_kv_router,
+        )
+
+        attach_kv_router(app)
+
         from vllm.entrypoints.serve.elastic_ep.api_router import (
             attach_router as elastic_ep_attach_router,
         )

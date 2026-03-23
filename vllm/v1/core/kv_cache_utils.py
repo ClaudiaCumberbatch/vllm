@@ -126,6 +126,11 @@ class KVCacheBlock:
     # Whether the block is a null block that should never be cached.
     is_null: bool = False
 
+    # Whether the block is pinned (protected from eviction).
+    pinned: bool = False
+    # The workflow ID this block is tagged with.
+    workflow_id: str | None = None
+
     @property
     def block_hash(self) -> BlockHashWithGroupId | None:
         return self._block_hash

@@ -511,3 +511,26 @@ class KVCacheManager:
     def new_step_starts(self) -> None:
         """Called when a new step is started."""
         self.coordinator.new_step_starts()
+
+    # ---- Workflow-aware KV cache control ----
+
+    def tag_request_blocks_workflow(
+        self, request_id: str, workflow_id: str
+    ) -> None:
+        """Tag all blocks of a request with a workflow_id."""
+        for manager in self.coordinator.single_type_managers:
+            blocks = manager.req_to_blocks.get(request_id, [])
+            if blocks:
+                self.block_pool.tag_blocks_workflow(blocks, workflow_id)
+
+    def pin_workflow(self, workflow_id: str) -> int:
+        """Pin all free blocks tagged with workflow_id."""
+        return self.block_pool.pin_workflow_blocks(workflow_id)
+
+    def unpin_workflow(self, workflow_id: str) -> int:
+        """Unpin all blocks tagged with workflow_id."""
+        return self.block_pool.unpin_workflow_blocks(workflow_id)
+
+    def force_evict_workflow(self, workflow_id: str) -> int:
+        """Force-evict all cached blocks tagged with workflow_id."""
+        return self.block_pool.force_evict_workflow_blocks(workflow_id)

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -179,6 +180,9 @@ class BlockPool:
         self.kv_event_queue: list[KVCacheEvent] = []
 
         self.metrics_collector = metrics_collector
+
+        # Workflow tracking: workflow_id -> set of block_ids
+        self.workflow_blocks: defaultdict[str, set[int]] = defaultdict(set)
 
     def get_cached_block(
         self, block_hash: BlockHash, kv_cache_group_ids: list[int]
@@ -418,9 +422,10 @@ class BlockPool:
         blocks_list = list(ordered_blocks)
         for block in blocks_list:
             block.ref_cnt -= 1
-        self.free_block_queue.append_n(
-            [block for block in blocks_list if block.ref_cnt == 0 and not block.is_null]
-        )
+        self.free_block_queue.append_n([
+            block for block in blocks_list
+            if block.ref_cnt == 0 and not block.is_null and not block.pinned
+        ])
 
     def evict_blocks(self, block_ids: set[int]) -> None:
         """evict blocks from the prefix cache by their block IDs.
@@ -508,3 +513,77 @@ class BlockPool:
         events = self.kv_event_queue
         self.kv_event_queue = []
         return events
+
+    # ---- Workflow-aware KV cache control ----
+
+    def tag_blocks_workflow(
+        self, blocks: list[KVCacheBlock], workflow_id: str
+    ) -> None:
+        """Tag blocks with a workflow_id for lifecycle control."""
+        for block in blocks:
+            if block.is_null:
+                continue
+            block.workflow_id = workflow_id
+            self.workflow_blocks[workflow_id].add(block.block_id)
+
+    def pin_workflow_blocks(self, workflow_id: str) -> int:
+        """Pin all free blocks tagged with workflow_id.
+
+        Pinned blocks are removed from the free queue so they cannot
+        be allocated to other requests.
+
+        Returns:
+            The number of blocks pinned.
+        """
+        count = 0
+        for block_id in list(self.workflow_blocks.get(workflow_id, set())):
+            block = self.blocks[block_id]
+            if not block.pinned and block.ref_cnt == 0 and not block.is_null:
+                block.pinned = True
+                self.free_block_queue.remove(block)
+                count += 1
+        return count
+
+    def unpin_workflow_blocks(self, workflow_id: str) -> int:
+        """Unpin all blocks tagged with workflow_id.
+
+        Unpinned blocks with ref_cnt == 0 are returned to the free queue.
+
+        Returns:
+            The number of blocks unpinned.
+        """
+        count = 0
+        for block_id in list(self.workflow_blocks.get(workflow_id, set())):
+            block = self.blocks[block_id]
+            if block.pinned:
+                block.pinned = False
+                if block.ref_cnt == 0 and not block.is_null:
+                    self.free_block_queue.append(block)
+                count += 1
+        return count
+
+    def force_evict_workflow_blocks(self, workflow_id: str) -> int:
+        """Force-evict all blocks tagged with workflow_id from prefix cache.
+
+        Clears block hashes so the next request cannot get a prefix cache hit.
+        Unpins and returns blocks to the free queue.
+
+        Returns:
+            The number of blocks whose cache hash was cleared.
+        """
+        count = 0
+        block_ids = self.workflow_blocks.pop(workflow_id, set())
+        for block_id in block_ids:
+            block = self.blocks[block_id]
+            was_pinned = block.pinned
+            block.pinned = False
+            block.workflow_id = None
+            if block.block_hash is not None:
+                self.cached_block_hash_to_block.pop(
+                    block.block_hash, block.block_id)
+                block.reset_hash()
+                count += 1
+            # Return previously-pinned free blocks to the free queue.
+            if block.ref_cnt == 0 and not block.is_null and was_pinned:
+                self.free_block_queue.append(block)
+        return count

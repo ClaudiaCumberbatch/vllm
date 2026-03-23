@@ -504,6 +504,11 @@ class Scheduler(SchedulerInterface):
             request_id = request.request_id
             req_to_new_blocks[request_id] = new_blocks
             num_scheduled_tokens[request_id] = num_new_tokens
+            # Tag blocks with workflow_id for KV cache lifecycle control.
+            if request.workflow_id:
+                self.kv_cache_manager.tag_request_blocks_workflow(
+                    request_id, request.workflow_id)
+
             token_budget -= num_new_tokens
             req_index += 1
 
@@ -800,6 +805,11 @@ class Scheduler(SchedulerInterface):
                 )
                 num_scheduled_tokens[request_id] = num_new_tokens
                 token_budget -= num_new_tokens
+                # Tag blocks with workflow_id for KV cache lifecycle control.
+                if request.workflow_id:
+                    self.kv_cache_manager.tag_request_blocks_workflow(
+                        request_id, request.workflow_id)
+
                 request.status = RequestStatus.RUNNING
                 request.num_computed_tokens = num_computed_tokens
                 # Count the number of prefix cached tokens.
@@ -1834,6 +1844,20 @@ class Scheduler(SchedulerInterface):
 
     def has_finished_requests(self) -> bool:
         return len(self.finished_req_ids) > 0
+
+    # ---- Workflow-aware KV cache control ----
+
+    def pin_kv_workflow(self, workflow_id: str) -> int:
+        """Pin all free blocks tagged with workflow_id."""
+        return self.kv_cache_manager.pin_workflow(workflow_id)
+
+    def unpin_kv_workflow(self, workflow_id: str) -> int:
+        """Unpin all blocks tagged with workflow_id."""
+        return self.kv_cache_manager.unpin_workflow(workflow_id)
+
+    def force_evict_kv_workflow(self, workflow_id: str) -> int:
+        """Force-evict all cached blocks tagged with workflow_id."""
+        return self.kv_cache_manager.force_evict_workflow(workflow_id)
 
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False

@@ -899,6 +899,19 @@ class AsyncLLM(EngineClient):
             reset_running_requests, reset_connector
         )
 
+    async def pin_kv_workflow(self, workflow_id: str) -> int:
+        """Pin KV cache blocks for a workflow."""
+        return await self.engine_core.pin_kv_workflow_async(workflow_id)
+
+    async def unpin_kv_workflow(self, workflow_id: str) -> int:
+        """Unpin KV cache blocks for a workflow."""
+        return await self.engine_core.unpin_kv_workflow_async(workflow_id)
+
+    async def force_evict_kv_workflow(self, workflow_id: str) -> int:
+        """Force-evict KV cache blocks for a workflow."""
+        return await self.engine_core.force_evict_kv_workflow_async(
+            workflow_id)
+
     async def reset_encoder_cache(self) -> None:
         await self.engine_core.reset_encoder_cache_async()
 

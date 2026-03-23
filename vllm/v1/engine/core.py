@@ -13,7 +13,6 @@ from enum import IntEnum
 from functools import partial
 from inspect import isclass, signature
 from logging import DEBUG
-from multiprocessing.queues import Queue
 from typing import Any, TypeVar, cast
 
 import msgspec
@@ -60,7 +59,6 @@ from vllm.v1.engine import (
     UtilityOutput,
     UtilityResult,
 )
-from vllm.v1.engine.tensor_ipc import TensorIpcReceiver
 from vllm.v1.engine.utils import (
     EngineHandshakeMetadata,
     EngineZmqAddresses,
@@ -571,6 +569,18 @@ class EngineCore:
 
         self.model_executor.reset_mm_cache()
 
+    def pin_kv_workflow(self, workflow_id: str) -> int:
+        """Pin KV cache blocks for a workflow."""
+        return self.scheduler.pin_kv_workflow(workflow_id)
+
+    def unpin_kv_workflow(self, workflow_id: str) -> int:
+        """Unpin KV cache blocks for a workflow."""
+        return self.scheduler.unpin_kv_workflow(workflow_id)
+
+    def force_evict_kv_workflow(self, workflow_id: str) -> int:
+        """Force-evict KV cache blocks for a workflow."""
+        return self.scheduler.force_evict_kv_workflow(workflow_id)
+
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False
     ) -> bool:
@@ -790,7 +800,6 @@ class EngineCoreProc(EngineCore):
         executor_class: type[Executor],
         log_stats: bool,
         client_handshake_address: str | None = None,
-        tensor_queue: Queue | None = None,
         *,
         engine_index: int = 0,
     ):
@@ -804,12 +813,6 @@ class EngineCoreProc(EngineCore):
         identity = self.engine_index.to_bytes(length=2, byteorder="little")
         self.engines_running = False
         self.shutdown_state = EngineShutdownState.RUNNING
-
-        # Receiver for tensor IPC
-        self.tensor_ipc_receiver: TensorIpcReceiver | None = None
-        if tensor_queue is not None:
-            self.tensor_ipc_receiver = TensorIpcReceiver(tensor_queue)
-            logger.info("Using tensor IPC queue for multimodal tensor sharing")
 
         with self._perform_handshakes(
             handshake_address,
@@ -1349,11 +1352,9 @@ class EngineCoreProc(EngineCore):
     ):
         """Input socket IO thread."""
 
-        # Msgpack serialization decoding with optional tensor IPC receiver.
-        add_request_decoder = MsgpackDecoder(
-            EngineCoreRequest, oob_tensor_provider=self.tensor_ipc_receiver
-        )
-        generic_decoder = MsgpackDecoder(oob_tensor_provider=self.tensor_ipc_receiver)
+        # Msgpack serialization decoding.
+        add_request_decoder = MsgpackDecoder(EngineCoreRequest)
+        generic_decoder = MsgpackDecoder()
 
         with ExitStack() as stack, zmq.Context() as ctx:
             input_sockets = [
@@ -1429,7 +1430,10 @@ class EngineCoreProc(EngineCore):
                     self.input_queue.put_nowait((request_type, request))
 
     def process_output_sockets(
-        self, output_paths: list[str], coord_output_path: str | None, engine_index: int
+        self,
+        output_paths: list[str],
+        coord_output_path: str | None,
+        engine_index: int,
     ):
         """Output socket IO thread."""
 
@@ -1588,7 +1592,6 @@ class DPEngineCoreProc(EngineCoreProc):
         executor_class: type[Executor],
         log_stats: bool,
         client_handshake_address: str | None = None,
-        tensor_queue: Queue | None = None,
     ):
         assert vllm_config.model_config.is_moe, (
             "DPEngineCoreProc should only be used for MoE models"
@@ -1614,7 +1617,6 @@ class DPEngineCoreProc(EngineCoreProc):
             log_stats,
             client_handshake_address,
             engine_index=dp_rank,
-            tensor_queue=tensor_queue,
         )
 
     def _init_data_parallel(self, vllm_config: VllmConfig):
@@ -1704,8 +1706,6 @@ class DPEngineCoreProc(EngineCoreProc):
             if self.eep_scaling_state is not None:
                 _ = self.eep_scaling_state.progress()
                 if self.eep_scaling_state.is_complete():
-                    if self.eep_scaling_state.worker_type == "removing":
-                        raise SystemExit
                     self.process_input_queue_block = True
                     self.eep_scaling_state = None
 
@@ -1869,7 +1869,20 @@ class DPEngineCoreProc(EngineCoreProc):
             scale_type="scale_up",
             reconfig_request=None,
         )
-        self.eep_scaling_state.run_pre_kv_init_states()
+        self.model_executor.collective_rpc("init_device")
+        self.model_executor.collective_rpc("load_model")
+        self._eep_send_engine_core_notification(
+            EEPNotificationType.NEW_CORE_ENGINES_WEIGHTS_INIT_READY
+        )
+        self.model_executor.collective_rpc(
+            "elastic_ep_execute", args=("receive_weights",)
+        )
+        self.available_gpu_memory_for_kv_cache = (
+            ParallelConfig.sync_kv_cache_memory_size(self.dp_group, -1)
+        )
+        self.model_executor.collective_rpc(
+            "elastic_ep_execute", args=("prepare_new_worker",)
+        )
         self.process_input_queue_block = False
 
 
