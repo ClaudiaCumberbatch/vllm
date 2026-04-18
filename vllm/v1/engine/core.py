@@ -581,6 +581,10 @@ class EngineCore:
         """Force-evict KV cache blocks for a workflow."""
         return self.scheduler.force_evict_kv_workflow(workflow_id)
 
+    def get_kv_stats(self) -> dict[str, int | float]:
+        """Get KV cache usage stats from scheduler."""
+        return self.scheduler.get_kv_stats()
+
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False
     ) -> bool:
@@ -800,6 +804,7 @@ class EngineCoreProc(EngineCore):
         executor_class: type[Executor],
         log_stats: bool,
         client_handshake_address: str | None = None,
+        tensor_queue: "Queue | None" = None,
         *,
         engine_index: int = 0,
     ):

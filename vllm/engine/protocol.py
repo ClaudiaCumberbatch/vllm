@@ -163,6 +163,11 @@ class EngineClient(ABC):
         ...
 
     @abstractmethod
+    async def get_kv_stats(self) -> dict[str, int | float]:
+        """Get KV cache block usage stats for the current engine."""
+        ...
+
+    @abstractmethod
     async def sleep(self, level: int = 1, mode: "PauseMode" = "abort") -> None:
         """Sleep the engine"""
         ...

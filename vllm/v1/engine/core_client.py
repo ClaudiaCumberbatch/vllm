@@ -150,6 +150,9 @@ class EngineCoreClient(ABC):
     ) -> bool:
         raise NotImplementedError
 
+    def get_kv_stats(self) -> dict[str, int | float]:
+        raise NotImplementedError
+
     def reset_encoder_cache(self) -> None:
         raise NotImplementedError
 
@@ -234,6 +237,9 @@ class EngineCoreClient(ABC):
         raise NotImplementedError
 
     async def force_evict_kv_workflow_async(self, workflow_id: str) -> int:
+        raise NotImplementedError
+
+    async def get_kv_stats_async(self) -> dict[str, int | float]:
         raise NotImplementedError
 
     async def reset_encoder_cache_async(self) -> None:
@@ -322,6 +328,9 @@ class InprocClient(EngineCoreClient):
         return self.engine_core.reset_prefix_cache(
             reset_running_requests, reset_connector
         )
+
+    def get_kv_stats(self) -> dict[str, int | float]:
+        return self.engine_core.get_kv_stats()
 
     def reset_encoder_cache(self) -> None:
         self.engine_core.reset_encoder_cache()
@@ -550,7 +559,8 @@ class MPClient(EngineCoreClient):
 
                 with launch_core_engines(
                     vllm_config, executor_class, log_stats, addresses
-                ) as (engine_manager, coordinator, addresses):
+                ) as (engine_manager, coordinator, addresses,
+                      tensor_queue):
                     self.resources.coordinator = coordinator
                     self.resources.engine_manager = engine_manager
 
@@ -834,6 +844,9 @@ class SyncMPClient(MPClient):
             "reset_prefix_cache", reset_running_requests, reset_connector
         )
 
+    def get_kv_stats(self) -> dict[str, int | float]:
+        return self.call_utility("get_kv_stats")
+
     def reset_encoder_cache(self) -> None:
         self.call_utility("reset_encoder_cache")
 
@@ -1103,6 +1116,9 @@ class AsyncMPClient(MPClient):
     async def force_evict_kv_workflow_async(self, workflow_id: str) -> int:
         return await self.call_utility_async(
             "force_evict_kv_workflow", workflow_id)
+
+    async def get_kv_stats_async(self) -> dict[str, int | float]:
+        return await self.call_utility_async("get_kv_stats")
 
     async def sleep_async(self, level: int = 1, mode: PauseMode = "abort") -> None:
         await self.call_utility_async("sleep", level, mode)

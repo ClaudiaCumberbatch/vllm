@@ -912,6 +912,10 @@ class AsyncLLM(EngineClient):
         return await self.engine_core.force_evict_kv_workflow_async(
             workflow_id)
 
+    async def get_kv_stats(self) -> dict[str, int | float]:
+        """Get KV cache usage stats from the scheduler."""
+        return await self.engine_core.get_kv_stats_async()
+
     async def reset_encoder_cache(self) -> None:
         await self.engine_core.reset_encoder_cache_async()
 

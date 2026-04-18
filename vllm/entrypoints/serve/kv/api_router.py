@@ -89,5 +89,19 @@ async def evict_kv(raw_request: Request) -> JSONResponse:
         )
 
 
+@router.get("/v1/kv/stats")
+async def kv_stats(raw_request: Request) -> JSONResponse:
+    """Return KV cache usage stats as block counts."""
+    try:
+        stats = await engine_client(raw_request).get_kv_stats()
+        return JSONResponse(content=stats)
+    except Exception as err:
+        logger.exception("Failed to get KV stats")
+        return JSONResponse(
+            content={"error": f"Failed to get KV stats: {err}"},
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
+        )
+
+
 def attach_router(app: FastAPI):
     app.include_router(router)

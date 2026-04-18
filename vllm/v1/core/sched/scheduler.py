@@ -1859,6 +1859,21 @@ class Scheduler(SchedulerInterface):
         """Force-evict all cached blocks tagged with workflow_id."""
         return self.kv_cache_manager.force_evict_workflow(workflow_id)
 
+    def get_kv_stats(self) -> dict[str, int | float]:
+        """Get KV cache usage stats as block counts."""
+        block_pool = self.kv_cache_manager.block_pool
+        total_blocks = max(block_pool.num_gpu_blocks - 1, 0)
+        free_blocks = max(block_pool.get_num_free_blocks(), 0)
+        used_blocks = max(total_blocks - free_blocks, 0)
+        usage = (used_blocks / total_blocks) if total_blocks > 0 else 0.0
+
+        return {
+            "used": used_blocks,
+            "total": total_blocks,
+            "free": free_blocks,
+            "usage": usage,
+        }
+
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False
     ) -> bool:
